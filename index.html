@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Air Wars 3</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #231F20;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    #gameContainer {
+      width: 100%;
+      height: 100%;
+      position: fixed;
+      inset: 0;
+    }
+    #gameContainer canvas {
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+      outline: none;
+    }
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #231F20;
+      color: #fff;
+      z-index: 10;
+      transition: opacity 0.3s ease;
+    }
+    #loading.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #loading .title {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 1.5rem;
+      letter-spacing: 0.05em;
+    }
+    #progressBar {
+      width: min(280px, 70vw);
+      height: 6px;
+      background: rgba(255,255,255,0.15);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    #progressFill {
+      height: 100%;
+      width: 0%;
+      background: #6842ff;
+      border-radius: 3px;
+      transition: width 0.15s ease;
+    }
+    #progressText {
+      margin-top: 0.75rem;
+      font-size: 0.85rem;
+      color: rgba(255,255,255,0.6);
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="title">Air Wars 3</div>
+    <div id="progressBar"><div id="progressFill"></div></div>
+    <div id="progressText">Loading…</div>
+  </div>
+  <div id="gameContainer"></div>
+
+  <script src="Build/UnityLoader.js"></script>
+  <script>
+    (function () {
+      // Resolve paths relative to this page so the game works in any subdirectory
+      var base = (function () {
+        var scripts = document.getElementsByTagName('script');
+        // Prefer the location of this HTML file
+        var path = window.location.pathname;
+        // Strip filename if present
+        if (path.endsWith('.html') || path.endsWith('/')) {
+          path = path.replace(/\/[^/]*$/, '/');
+        } else {
+          path = path + '/';
+        }
+        // Ensure trailing slash for directory
+        if (!path.endsWith('/')) path += '/';
+        return path;
+      })();
+
+      // Absolute path to the Build folder relative to the page
+      var buildPath = 'Build/';
+
+      var progressFill = document.getElementById('progressFill');
+      var progressText = document.getElementById('progressText');
+      var loading = document.getElementById('loading');
+
+      function setProgress(value, label) {
+        var pct = Math.min(100, Math.max(0, Math.round(value * 100)));
+        progressFill.style.width = pct + '%';
+        if (label) progressText.textContent = label;
+        else progressText.textContent = pct + '%';
+      }
+
+      var gameInstance = UnityLoader.instantiate(
+        'gameContainer',
+        buildPath + 'AirWars3-158.json',
+        {
+          onProgress: function (instance, progress) {
+            if (progress < 1) {
+              setProgress(progress, Math.round(progress * 100) + '%');
+            } else {
+              setProgress(1, 'Starting…');
+              setTimeout(function () {
+                loading.classList.add('hidden');
+                setTimeout(function () {
+                  loading.style.display = 'none';
+                }, 350);
+              }, 200);
+            }
+          },
+          Module: {
+            // Ensure relative asset paths resolve correctly when hosted in a subfolder
+            onRuntimeInitialized: function () {
+              var canvas = document.querySelector('#gameContainer canvas');
+              if (canvas) {
+                canvas.style.outline = 'none';
+                canvas.tabIndex = 1;
+                canvas.focus();
+              }
+            }
+          }
+        }
+      );
+
+      // Focus canvas on click so keyboard controls work immediately
+      document.getElementById('gameContainer').addEventListener('click', function () {
+        var canvas = document.querySelector('#gameContainer canvas');
+        if (canvas) canvas.focus();
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -6,16 +6,163 @@
   <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, user-scalable=no">
   <title>Unity WebGL Player | Air Wars 3</title>
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #231F20; }
-    #unityContainer { width: 100%; height: 100%; position: absolute; left: 0; top: 0; }
-    #unityContainer canvas { width: 100%; height: 100%; background: #231F20; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      overflow: hidden; background: #231F20;
+      font-family: Helvetica, Arial, sans-serif;
+    }
+    #unityContainer {
+      width: 100%; height: 100%;
+      position: absolute; left: 0; top: 0;
+    }
+    #unityContainer canvas {
+      width: 100%; height: 100%; background: #231F20;
+    }
+    #boot {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      color: #fff; text-align: center; z-index: 5;
+    }
+    #boot .title { font-size: 18px; font-weight: bold; margin-bottom: 14px; }
+    #bootBar {
+      width: 200px; height: 10px; margin: 0 auto;
+      background: rgba(255,255,255,0.2); border-radius: 5px; overflow: hidden;
+    }
+    #bootFill {
+      width: 0%; height: 100%; background: #19a0ff; border-radius: 5px;
+      transition: width 0.15s ease;
+    }
+    #bootInfo {
+      margin-top: 10px; font-size: 12px; color: rgba(255,255,255,0.65);
+    }
   </style>
-  <script src="Build/UnityLoader.js"></script>
-  <script>
-    var unityInstance = UnityLoader.instantiate("unityContainer", "Build/AirWars3-158.json");
-  </script>
 </head>
 <body>
+  <div id="boot">
+    <div class="title">Air Wars 3</div>
+    <div id="bootBar"><div id="bootFill"></div></div>
+    <div id="bootInfo">Preparing…</div>
+  </div>
   <div id="unityContainer"></div>
+
+  <script src="Build/UnityLoader.js"></script>
+  <script>
+(function () {
+  var DATA_NAME = 'AirWars3-158.data.unityweb';
+  var PARTS = [
+    'Build/AirWars3-158.data.unityweb.part00',
+    'Build/AirWars3-158.data.unityweb.part01',
+    'Build/AirWars3-158.data.unityweb.part02'
+  ];
+  var JSON_URL = 'Build/AirWars3-158.json';
+
+  var bootFill = document.getElementById('bootFill');
+  var bootInfo = document.getElementById('bootInfo');
+  var boot = document.getElementById('boot');
+  var dataBlobUrl = null;
+
+  function setBoot(pct, msg) {
+    bootFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+    if (msg) bootInfo.textContent = msg;
+  }
+
+  function hideBoot() {
+    boot.style.display = 'none';
+  }
+
+  function probeFullData() {
+    return fetch('Build/' + DATA_NAME, { method: 'HEAD', cache: 'no-store' })
+      .then(function (r) { return r.ok; })
+      .catch(function () { return false; });
+  }
+
+  function mergeParts() {
+    setBoot(0, 'Downloading data parts…');
+    var loaded = 0;
+    var totalHint = PARTS.length;
+
+    return Promise.all(PARTS.map(function (url) {
+      return fetch(url, { cache: 'force-cache' }).then(function (res) {
+        if (!res.ok) throw new Error('Failed to fetch ' + url + ' (' + res.status + ')');
+        return res.arrayBuffer().then(function (buf) {
+          loaded++;
+          setBoot((loaded / totalHint) * 90, 'Data part ' + loaded + '/' + totalHint);
+          return buf;
+        });
+      });
+    })).then(function (buffers) {
+      setBoot(92, 'Merging data…');
+      var total = 0;
+      for (var i = 0; i < buffers.length; i++) total += buffers[i].byteLength;
+      var out = new Uint8Array(total);
+      var offset = 0;
+      for (var j = 0; j < buffers.length; j++) {
+        out.set(new Uint8Array(buffers[j]), offset);
+        offset += buffers[j].byteLength;
+      }
+      var header = String.fromCharCode.apply(null, out.subarray(0, 15));
+      if (header !== 'UnityWebData1.0') {
+        throw new Error('Merged data is corrupt (bad header: ' + header + ')');
+      }
+      dataBlobUrl = URL.createObjectURL(new Blob([out], { type: 'application/octet-stream' }));
+      setBoot(96, 'Starting Unity…');
+      return dataBlobUrl;
+    });
+  }
+
+  function installDataPatch(blobUrl) {
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      var args = Array.prototype.slice.call(arguments);
+      if (typeof url === 'string' &&
+          url.indexOf(DATA_NAME) !== -1 &&
+          url.indexOf('.part') === -1) {
+        args[1] = blobUrl;
+      }
+      return origOpen.apply(this, args);
+    };
+
+    var origFetch = window.fetch;
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : (input && input.url);
+      if (typeof url === 'string' &&
+          url.indexOf(DATA_NAME) !== -1 &&
+          url.indexOf('.part') === -1) {
+        return origFetch.call(this, blobUrl, init);
+      }
+      return origFetch.apply(this, arguments);
+    };
+  }
+
+  function startUnity() {
+    if (typeof UnityLoader === 'undefined') {
+      bootInfo.textContent = 'Error: UnityLoader.js failed to load';
+      return;
+    }
+    UnityLoader.instantiate('unityContainer', JSON_URL, {
+      onProgress: function (instance, progress) {
+        var pct = 96 + progress * 4;
+        setBoot(pct, progress >= 1 ? 'Starting…' : Math.round(progress * 100) + '%');
+        if (progress >= 1) setTimeout(hideBoot, 300);
+      }
+    });
+  }
+
+  probeFullData().then(function (hasFull) {
+    if (hasFull) {
+      setBoot(50, 'Loading…');
+      startUnity();
+      return;
+    }
+    return mergeParts().then(function (blobUrl) {
+      installDataPatch(blobUrl);
+      startUnity();
+    });
+  }).catch(function (err) {
+    bootInfo.textContent = 'Error: ' + (err && err.message ? err.message : err);
+    console.error(err);
+  });
+})();
+  </script>
 </body>
 </html>

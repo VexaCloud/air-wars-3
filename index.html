@@ -70,10 +70,21 @@
     boot.style.display = 'none';
   }
 
-  // Returns true if the full data file is already present (local join / CDN)
+  // Returns true only if the full data file is really present (local join / CDN).
+  // Checks the Unity header instead of just "200 OK", because some hosts answer
+  // 200 + index.html for missing files, which would stall the loader.
   function probeFullData() {
-    return fetch('Build/' + DATA_NAME, { method: 'HEAD', cache: 'no-store' })
-      .then(function (r) { return r.ok; })
+    return fetch('Build/' + DATA_NAME, { headers: { Range: 'bytes=0-14' }, cache: 'no-store' })
+      .then(function (r) {
+        if (!r.ok || !r.body) return false;
+        var reader = r.body.getReader();
+        return reader.read().then(function (chunk) {
+          reader.cancel();               // never pull the whole 100 MB just to probe
+          var v = chunk.value;
+          return !!v && v.length >= 15 &&
+            String.fromCharCode.apply(null, v.subarray(0, 15)) === 'UnityWebData1.0';
+        });
+      })
       .catch(function () { return false; });
   }
 
@@ -94,20 +105,13 @@
       });
     })).then(function (buffers) {
       setBoot(92, 'Merging data…');
-      var total = 0;
-      for (var i = 0; i < buffers.length; i++) total += buffers[i].byteLength;
-      var out = new Uint8Array(total);
-      var offset = 0;
-      for (var j = 0; j < buffers.length; j++) {
-        out.set(new Uint8Array(buffers[j]), offset);
-        offset += buffers[j].byteLength;
-      }
-      // Sanity-check Unity header
-      var header = String.fromCharCode.apply(null, out.subarray(0, 15));
+      // Sanity-check Unity header (first 15 bytes of part 0)
+      var header = String.fromCharCode.apply(null, new Uint8Array(buffers[0], 0, 15));
       if (header !== 'UnityWebData1.0') {
         throw new Error('Merged data is corrupt (bad header: ' + header + ')');
       }
-      dataBlobUrl = URL.createObjectURL(new Blob([out], { type: 'application/octet-stream' }));
+      // Blob takes the buffers as-is, so there is no extra full-size copy in memory
+      dataBlobUrl = URL.createObjectURL(new Blob(buffers, { type: 'application/octet-stream' }));
       setBoot(96, 'Starting Unity…');
       return dataBlobUrl;
     });
@@ -151,7 +155,9 @@
         onProgress: function (instance, progress) {
           // Map Unity 0..1 onto the last bit of our boot bar
           var pct = 96 + progress * 4;
-          setBoot(pct, progress >= 1 ? 'Starting…' : Math.round(progress * 100) + '%');
+          setBoot(pct, progress >= 1 ? 'Starting…' :
+                          progress >= 0.9 ? 'Initializing game…' :
+                          Math.round(progress * 100) + '%');
           if (progress >= 1) {
             setTimeout(hideBoot, 300);
           }

@@ -1,5 +1,7 @@
 # Air Wars 3 (local Unity WebGL)
 
+**CrazyGames SiteLock removed** – the anti-piracy module that crashed the game outside crazygames.com domains has been eliminated. The compiled SDK imports are satisfied by an offline mock, document.URL is forced to a valid host, and the identifiable SiteLock strings were stripped from the WASM. The game now initializes and runs fully when served locally.
+
 ## After cloning (required once)
 
 The data file is split for GitHub’s 100MB file limit. Reassemble it:

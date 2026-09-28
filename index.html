@@ -48,6 +48,60 @@
   <script src="Build/UnityLoader.js"></script>
   <script>
 (function () {
+  // === Remove CrazyGames SiteLock + provide offline SDK mock ===
+  // 1. Spoof document.URL so any remaining C# SiteLock host check passes.
+  // 2. Install a complete window.Crazygames mock so the compiled SDK calls
+  //    (_InitSDK, _HappyTimeSDK, etc.) never touch the real SiteLock code path
+  //    and never crash. This effectively removes the anti-piracy module.
+  (function removeSiteLockAndMockSDK() {
+    var fakeUrl = 'https://www.crazygames.com/game/air-wars-3';
+    var fakeLoc = {
+      href: fakeUrl, protocol: 'https:', host: 'www.crazygames.com',
+      hostname: 'www.crazygames.com', port: '', pathname: '/game/air-wars-3',
+      search: '', hash: '', origin: 'https://www.crazygames.com',
+      toString: function () { return fakeUrl; },
+      assign: function () {}, replace: function () {}, reload: function () {}
+    };
+    try {
+      Object.defineProperty(document, 'URL', { get: function () { return fakeUrl; }, configurable: true });
+      Object.defineProperty(document, 'documentURI', { get: function () { return fakeUrl; }, configurable: true });
+    } catch (e) {}
+    try {
+      var desc = Object.getOwnPropertyDescriptor(window, 'location');
+      if (desc && desc.configurable) {
+        Object.defineProperty(window, 'location', { get: function () { return fakeLoc; }, configurable: true });
+      }
+    } catch (e) {}
+
+    // Full offline mock of the CrazyGames SDK. All methods succeed immediately.
+    // SiteLock never runs because the real SDK is never loaded.
+    window.Crazygames = {
+      init: function (opts) {
+        // Immediately signal success to Unity (no SiteLock check)
+        if (opts && opts.crazySDKObjectName && typeof SendMessage === 'function') {
+          try { SendMessage(opts.crazySDKObjectName, 'InitCallback', 'true'); } catch (e) {}
+        }
+        return true;
+      },
+      happytime: function () {},
+      gameplayStart: function () {},
+      gameplayStop: function () {},
+      requestAd: function () {
+        // Instant success callback so ads don't block
+        if (typeof SendMessage === 'function') {
+          try { SendMessage('CrazySDK', 'AdFinished', ''); } catch (e) {}
+        }
+      },
+      requestBanners: function () {},
+      requestInviteUrl: function () {},
+      screenshotReceived: function () {},
+      // Extra stubs that some builds call
+      isInstantGame: function () { return false; },
+      getUserInfo: function () { return {}; }
+    };
+  })();
+  // === end SiteLock removal ===
+
   var DATA_NAME = 'AirWars3-158.data.unityweb';
   var PARTS = [
     'Build/AirWars3-158.data.unityweb.part00',

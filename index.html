@@ -25,16 +25,15 @@
     }
     #boot .title { font-size: 18px; font-weight: bold; margin-bottom: 14px; }
     #bootBar {
-      width: 220px; height: 10px; margin: 0 auto;
+      width: 200px; height: 10px; margin: 0 auto;
       background: rgba(255,255,255,0.2); border-radius: 5px; overflow: hidden;
     }
     #bootFill {
       width: 0%; height: 100%; background: #19a0ff; border-radius: 5px;
-      transition: width 0.12s ease;
+      transition: width 0.15s ease;
     }
     #bootInfo {
       margin-top: 10px; font-size: 12px; color: rgba(255,255,255,0.65);
-      max-width: 280px; margin-left: auto; margin-right: auto; line-height: 1.4;
     }
   </style>
 </head>
@@ -49,9 +48,6 @@
   <script src="Build/UnityLoader.js"></script>
   <script>
 (function () {
-  // Full data file from GitHub Release (avoids 100MB repo limit + browser merge)
-  var RELEASE_DATA_URL = 'https://github.com/VexaCloud/air-wars-3/releases/download/v1.0.0/AirWars3-158.data.unityweb';
-
   var DATA_NAME = 'AirWars3-158.data.unityweb';
   var PARTS = [
     'Build/AirWars3-158.data.unityweb.part00',
@@ -69,94 +65,35 @@
     bootFill.style.width = Math.max(0, Math.min(100, pct)) + '%';
     if (msg) bootInfo.textContent = msg;
   }
-  function hideBoot() { boot.style.display = 'none'; }
 
-  function installUrlPatch(fromSubstr, toUrl) {
-    var origOpen = XMLHttpRequest.prototype.open;
-    XMLHttpRequest.prototype.open = function (method, url) {
-      var args = Array.prototype.slice.call(arguments);
-      if (typeof url === 'string' && url.indexOf(fromSubstr) !== -1 && url.indexOf('.part') === -1) {
-        args[1] = toUrl;
-      }
-      return origOpen.apply(this, args);
-    };
-    var origFetch = window.fetch;
-    window.fetch = function (input, init) {
-      var url = typeof input === 'string' ? input : (input && input.url);
-      if (typeof url === 'string' && url.indexOf(fromSubstr) !== -1 && url.indexOf('.part') === -1) {
-        return origFetch.call(this, toUrl, init);
-      }
-      return origFetch.apply(this, arguments);
-    };
+  function hideBoot() {
+    boot.style.display = 'none';
   }
 
-  function fetchWithProgress(url, onProgress) {
-    return fetch(url, { cache: 'force-cache' }).then(function (res) {
-      if (!res.ok) throw new Error('HTTP ' + res.status + ' for ' + url);
-      var total = Number(res.headers.get('Content-Length')) || 0;
-      if (!res.body || !res.body.getReader) {
-        return res.arrayBuffer();
-      }
-      var reader = res.body.getReader();
-      var chunks = [];
-      var received = 0;
-      function pump() {
-        return reader.read().then(function (result) {
-          if (result.done) {
-            var out = new Uint8Array(received);
-            var off = 0;
-            for (var i = 0; i < chunks.length; i++) {
-              out.set(chunks[i], off);
-              off += chunks[i].byteLength;
-            }
-            return out.buffer;
-          }
-          chunks.push(result.value);
-          received += result.value.byteLength;
-          if (onProgress) onProgress(received, total);
-          return pump();
-        });
-      }
-      return pump();
-    });
+  // Returns true if the full data file is already present (local join / CDN)
+  function probeFullData() {
+    return fetch('Build/' + DATA_NAME, { method: 'HEAD', cache: 'no-store' })
+      .then(function (r) { return r.ok; })
+      .catch(function () { return false; });
   }
 
-  function tryReleaseData() {
-    setBoot(2, 'Downloading data…');
-    return fetchWithProgress(RELEASE_DATA_URL, function (received, total) {
-      if (total > 0) {
-        setBoot(2 + (received / total) * 70, 'Data ' + Math.round(received / total * 100) + '%');
-      } else {
-        setBoot(20, 'Downloading data… ' + Math.round(received / 1048576) + ' MB');
-      }
-    }).then(function (buf) {
-      var u8 = new Uint8Array(buf);
-      var header = String.fromCharCode.apply(null, u8.subarray(0, 15));
-      if (header !== 'UnityWebData1.0') {
-        throw new Error('Release data bad header: ' + header);
-      }
-      dataBlobUrl = URL.createObjectURL(new Blob([buf], { type: 'application/octet-stream' }));
-      return dataBlobUrl;
-    }).catch(function (err) {
-      console.warn('Release data failed, falling back to parts:', err);
-      return null;
-    });
-  }
-
+  // Fetch split parts, merge into one Blob, return object URL
   function mergeParts() {
     setBoot(0, 'Downloading data parts…');
     var loaded = 0;
-    return Promise.all(PARTS.map(function (url) {
+    var totalHint = PARTS.length;
+
+    return Promise.all(PARTS.map(function (url, index) {
       return fetch(url, { cache: 'force-cache' }).then(function (res) {
-        if (!res.ok) throw new Error('Failed ' + url + ' (' + res.status + ')');
+        if (!res.ok) throw new Error('Failed to fetch ' + url + ' (' + res.status + ')');
         return res.arrayBuffer().then(function (buf) {
           loaded++;
-          setBoot((loaded / PARTS.length) * 70, 'Data part ' + loaded + '/' + PARTS.length);
+          setBoot((loaded / totalHint) * 90, 'Data part ' + loaded + '/' + totalHint);
           return buf;
         });
       });
     })).then(function (buffers) {
-      setBoot(75, 'Merging…');
+      setBoot(92, 'Merging data…');
       var total = 0;
       for (var i = 0; i < buffers.length; i++) total += buffers[i].byteLength;
       var out = new Uint8Array(total);
@@ -165,63 +102,80 @@
         out.set(new Uint8Array(buffers[j]), offset);
         offset += buffers[j].byteLength;
       }
+      // Sanity-check Unity header
       var header = String.fromCharCode.apply(null, out.subarray(0, 15));
-      if (header !== 'UnityWebData1.0') throw new Error('Merged data corrupt');
+      if (header !== 'UnityWebData1.0') {
+        throw new Error('Merged data is corrupt (bad header: ' + header + ')');
+      }
       dataBlobUrl = URL.createObjectURL(new Blob([out], { type: 'application/octet-stream' }));
+      setBoot(96, 'Starting Unity…');
       return dataBlobUrl;
     });
   }
 
-  function probeLocalFull() {
-    return fetch('Build/' + DATA_NAME, { method: 'HEAD', cache: 'no-store' })
-      .then(function (r) { return r.ok; })
-      .catch(function () { return false; });
+  // Intercept XHR so requests for the full data file use the merged blob URL
+  function installDataPatch(blobUrl) {
+    var origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      var args = Array.prototype.slice.call(arguments);
+      if (typeof url === 'string' &&
+          url.indexOf(DATA_NAME) !== -1 &&
+          url.indexOf('.part') === -1) {
+        args[1] = blobUrl;
+      }
+      return origOpen.apply(this, args);
+    };
+
+    // Also patch fetch() in case anything uses it
+    var origFetch = window.fetch;
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : (input && input.url);
+      if (typeof url === 'string' &&
+          url.indexOf(DATA_NAME) !== -1 &&
+          url.indexOf('.part') === -1) {
+        return origFetch.call(this, blobUrl, init);
+      }
+      return origFetch.apply(this, arguments);
+    };
   }
 
   function startUnity() {
-    setBoot(80, 'Loading engine…');
-    UnityLoader.instantiate('unityContainer', JSON_URL, {
-      onProgress: function (instance, progress) {
-        if (progress >= 1) {
-          setBoot(100, 'Starting…');
-          setTimeout(hideBoot, 250);
-        } else if (progress >= 0.9) {
-          setBoot(90 + (progress - 0.9) * 100, 'Compiling (tab may freeze 1–3 min)…');
-        } else {
-          setBoot(80 + progress * 10, Math.round(progress * 100) + '%');
-        }
-      }
-    });
-  }
-
-  function boot() {
     if (typeof UnityLoader === 'undefined') {
-      bootInfo.textContent = 'Error: UnityLoader.js missing';
+      bootInfo.textContent = 'Error: UnityLoader.js failed to load';
       return;
     }
-    probeLocalFull().then(function (hasLocal) {
-      if (hasLocal) {
-        startUnity();
-        return;
-      }
-      return tryReleaseData().then(function (blobUrl) {
-        if (blobUrl) {
-          installUrlPatch(DATA_NAME, blobUrl);
-          startUnity();
-          return;
+    var unityInstance = UnityLoader.instantiate(
+      'unityContainer',
+      JSON_URL,
+      {
+        onProgress: function (instance, progress) {
+          // Map Unity 0..1 onto the last bit of our boot bar
+          var pct = 96 + progress * 4;
+          setBoot(pct, progress >= 1 ? 'Starting…' : Math.round(progress * 100) + '%');
+          if (progress >= 1) {
+            setTimeout(hideBoot, 300);
+          }
         }
-        return mergeParts().then(function (blobUrl2) {
-          installUrlPatch(DATA_NAME, blobUrl2);
-          startUnity();
-        });
-      });
-    }).catch(function (err) {
-      bootInfo.textContent = 'Error: ' + (err && err.message ? err.message : err);
-      console.error(err);
-    });
+      }
+    );
   }
 
-  boot();
+  // Boot sequence
+  probeFullData().then(function (hasFull) {
+    if (hasFull) {
+      setBoot(50, 'Loading…');
+      startUnity();
+      return;
+    }
+    // GitHub Pages / repo without joined file: merge parts in the browser
+    return mergeParts().then(function (blobUrl) {
+      installDataPatch(blobUrl);
+      startUnity();
+    });
+  }).catch(function (err) {
+    bootInfo.textContent = 'Error: ' + (err && err.message ? err.message : err);
+    console.error(err);
+  });
 })();
   </script>
 </body>

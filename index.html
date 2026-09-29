@@ -102,6 +102,109 @@
   })();
   // === end SiteLock removal ===
 
+  // === Photon AppId override (free Photon Cloud) ===
+  // The original game fetches its Photon AppId from dead martiangames.com PHP
+  // endpoints and then disconnects. We intercept those requests and supply
+  // the user-provided free Photon AppId so the game connects to Photon Cloud.
+  // Works from GitHub Pages (HTTPS → WSS).
+  (function installPhotonAppIdOverride() {
+    // Do NOT call martiangames.com. Serve a local response that uses your Photon AppId.
+    // Format matches what the live PHP returns: TOKEN~region~number~baseUrl
+    // Unity WebRequest uses responseType=arraybuffer — response MUST be an ArrayBuffer.
+    var APP_ID = 'c9b4e40b-41ea-4e3d-90a1-24ffe1df1584';
+    var BODY = APP_ID + '~us~161~https://localhost/';
+    var BODY_BYTES = new TextEncoder().encode(BODY);
+
+    function isTarget(url) {
+      if (typeof url !== 'string') return false;
+      var u = url.toLowerCase();
+      return u.indexOf('getphotonappid') !== -1 ||
+             u.indexOf('php3/') !== -1 ||
+             u.indexOf('martiangames.com') !== -1;
+    }
+
+    function makeArrayBuffer() {
+      var ab = new ArrayBuffer(BODY_BYTES.length);
+      new Uint8Array(ab).set(BODY_BYTES);
+      return ab;
+    }
+
+    // ---- fetch ----
+    var _fetch = window.fetch;
+    window.fetch = function (input, init) {
+      var url = typeof input === 'string' ? input : (input && input.url);
+      if (isTarget(url)) {
+        return Promise.resolve(new Response(BODY, {
+          status: 200,
+          statusText: 'OK',
+          headers: { 'Content-Type': 'text/plain; charset=utf-8' }
+        }));
+      }
+      return _fetch.apply(this, arguments);
+    };
+
+    // ---- XMLHttpRequest (Unity WebRequest path) ----
+    var _open = XMLHttpRequest.prototype.open;
+    var _send = XMLHttpRequest.prototype.send;
+    var _setRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
+
+    XMLHttpRequest.prototype.open = function (method, url) {
+      this.__aw3url = url;
+      return _open.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+      if (this.__aw3url && isTarget(this.__aw3url)) return;
+      return _setRequestHeader.apply(this, arguments);
+    };
+
+    XMLHttpRequest.prototype.send = function (body) {
+      var url = this.__aw3url;
+      if (!isTarget(url)) {
+        return _send.apply(this, arguments);
+      }
+
+      var self = this;
+      var ab = makeArrayBuffer();
+      var text = BODY;
+
+      setTimeout(function () {
+        // Unity sets responseType = "arraybuffer" before send
+        var wantsAB = (self.responseType === 'arraybuffer' || self.responseType === 'arraybuffer');
+
+        try {
+          Object.defineProperty(self, 'readyState', { configurable: true, get: function () { return 4; } });
+          Object.defineProperty(self, 'status', { configurable: true, get: function () { return 200; } });
+          Object.defineProperty(self, 'statusText', { configurable: true, get: function () { return 'OK'; } });
+          Object.defineProperty(self, 'response', { configurable: true, get: function () { return wantsAB ? ab : text; } });
+          Object.defineProperty(self, 'responseText', { configurable: true, get: function () { return text; } });
+          Object.defineProperty(self, 'responseURL', { configurable: true, get: function () { return url; } });
+        } catch (e) {
+          self.readyState = 4;
+          self.status = 200;
+          self.statusText = 'OK';
+          self.response = wantsAB ? ab : text;
+          self.responseText = text;
+        }
+
+        self.getAllResponseHeaders = function () {
+          return 'content-type: text/plain; charset=utf-8\r\ncontent-length: ' + BODY_BYTES.length + '\r\n';
+        };
+        self.getResponseHeader = function (name) {
+          name = (name || '').toLowerCase();
+          if (name === 'content-type') return 'text/plain; charset=utf-8';
+          if (name === 'content-length') return String(BODY_BYTES.length);
+          return null;
+        };
+
+        if (typeof self.onreadystatechange === 'function') try { self.onreadystatechange(); } catch (e) {}
+        if (typeof self.onload === 'function') try { self.onload({}); } catch (e) {}
+        if (typeof self.onloadend === 'function') try { self.onloadend({}); } catch (e) {}
+      }, 10);
+    };
+  })();
+  // === end Photon AppId override ===
+
   var DATA_NAME = 'AirWars3-158.data.unityweb';
   var PARTS = [
     'Build/AirWars3-158.data.unityweb.part00',

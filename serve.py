@@ -22,7 +22,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     }
 
     def end_headers(self):
-        # Allow SharedArrayBuffer / COOP if needed later; safe defaults
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 

@@ -1,6 +1,11 @@
 # Air Wars 3 (local Unity WebGL)
 
-**CrazyGames SiteLock removed** – the anti-piracy module that crashed the game outside crazygames.com domains has been eliminated. The compiled SDK imports are satisfied by an offline mock, document.URL is forced to a valid host, and the identifiable SiteLock strings were stripped from the WASM. The game now initializes and runs fully when served locally.
+**SiteLock removed + Martian Photon endpoint restored**
+
+- CrazyGames SiteLock neutralized so the game loads off crazygames.com.
+- `getPhotonAppIDregion.php` is intercepted and returns the live Martian response
+  (same body the official servers return).
+- Works from GitHub Pages / local static hosting.
 
 ## After cloning (required once)
 
@@ -52,3 +57,4 @@ Open the URL shown (e.g. http://localhost:3000).
 
 Do **not** commit the reassembled `AirWars3-158.data.unityweb` (101MB).  
 Commit only the `.part00` / `.part01` / `.part02` files (each ≤ 40MB).
+

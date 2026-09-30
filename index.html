@@ -48,11 +48,6 @@
   <script src="Build/UnityLoader.js"></script>
   <script>
 (function () {
-  // === Remove CrazyGames SiteLock + provide offline SDK mock ===
-  // 1. Spoof document.URL so any remaining C# SiteLock host check passes.
-  // 2. Install a complete window.Crazygames mock so the compiled SDK calls
-  //    (_InitSDK, _HappyTimeSDK, etc.) never touch the real SiteLock code path
-  //    and never crash. This effectively removes the anti-piracy module.
   (function removeSiteLockAndMockSDK() {
     var fakeUrl = 'https://www.crazygames.com/game/air-wars-3';
     var fakeLoc = {
@@ -73,11 +68,8 @@
       }
     } catch (e) {}
 
-    // Full offline mock of the CrazyGames SDK. All methods succeed immediately.
-    // SiteLock never runs because the real SDK is never loaded.
     window.Crazygames = {
       init: function (opts) {
-        // Immediately signal success to Unity (no SiteLock check)
         if (opts && opts.crazySDKObjectName && typeof SendMessage === 'function') {
           try { SendMessage(opts.crazySDKObjectName, 'InitCallback', 'true'); } catch (e) {}
         }
@@ -87,7 +79,6 @@
       gameplayStart: function () {},
       gameplayStop: function () {},
       requestAd: function () {
-        // Instant success callback so ads don't block
         if (typeof SendMessage === 'function') {
           try { SendMessage('CrazySDK', 'AdFinished', ''); } catch (e) {}
         }
@@ -95,55 +86,54 @@
       requestBanners: function () {},
       requestInviteUrl: function () {},
       screenshotReceived: function () {},
-      // Extra stubs that some builds call
       isInstantGame: function () { return false; },
       getUserInfo: function () { return {}; }
     };
   })();
-  // === end SiteLock removal ===
-
-  // === Photon AppId override (free Photon Cloud) ===
-  // The original game fetches its Photon AppId from dead martiangames.com PHP
-  // endpoints and then disconnects. We intercept those requests and supply
-  // the user-provided free Photon AppId so the game connects to Photon Cloud.
-  // Works from GitHub Pages (HTTPS → WSS).
-  (function installPhotonAppIdOverride() {
-    // Do NOT call martiangames.com. Serve a local response that uses your Photon AppId.
-    // Format matches what the live PHP returns: TOKEN~region~number~baseUrl
-    // Unity WebRequest uses responseType=arraybuffer — response MUST be an ArrayBuffer.
+   (function installPhotonAppIdOverride() {
     var APP_ID = 'c9b4e40b-41ea-4e3d-90a1-24ffe1df1584';
-    var BODY = APP_ID + '~us~161~https://localhost/';
-    var BODY_BYTES = new TextEncoder().encode(BODY);
+    var APPID_BODY = APP_ID + '~us~161~https://localhost/';
+    var LOGIN_OK = 'Guest';
+    var OK = 'OK';
 
-    function isTarget(url) {
-      if (typeof url !== 'string') return false;
+    function whichEndpoint(url) {
+      if (typeof url !== 'string') return null;
       var u = url.toLowerCase();
-      return u.indexOf('getphotonappid') !== -1 ||
-             u.indexOf('php3/') !== -1 ||
-             u.indexOf('martiangames.com') !== -1;
+      if (u.indexOf('photonengine') !== -1 || u.indexOf('exitgames') !== -1) return null;
+      if (u.indexOf('getphotonappid') !== -1 || u.indexOf('php3/getphoton') !== -1) return 'appid';
+      if (u.indexOf('playerlogin') !== -1 || u.indexOf('login.php') !== -1) return 'login';
+      if (u.indexOf('martiangames.com') !== -1 || u.indexOf('/php3/') !== -1 ||
+          (u.indexOf('.php') !== -1 && (u.indexOf('games') !== -1 || u.indexOf('airwars') !== -1)))
+        return 'other';
+      return null;
     }
 
-    function makeArrayBuffer() {
-      var ab = new ArrayBuffer(BODY_BYTES.length);
-      new Uint8Array(ab).set(BODY_BYTES);
-      return ab;
+    function bodyFor(kind) {
+      if (kind === 'appid') return APPID_BODY;
+      if (kind === 'login') return LOGIN_OK;
+      return OK;
     }
 
-    // ---- fetch ----
+    function toAB(text) {
+      var bytes = new TextEncoder().encode(text);
+      var ab = new ArrayBuffer(bytes.length);
+      new Uint8Array(ab).set(bytes);
+      return { ab: ab, text: text, len: bytes.length };
+    }
+
     var _fetch = window.fetch;
     window.fetch = function (input, init) {
       var url = typeof input === 'string' ? input : (input && input.url);
-      if (isTarget(url)) {
-        return Promise.resolve(new Response(BODY, {
-          status: 200,
-          statusText: 'OK',
+      var kind = whichEndpoint(url);
+      if (kind) {
+        return Promise.resolve(new Response(bodyFor(kind), {
+          status: 200, statusText: 'OK',
           headers: { 'Content-Type': 'text/plain; charset=utf-8' }
         }));
       }
       return _fetch.apply(this, arguments);
     };
 
-    // ---- XMLHttpRequest (Unity WebRequest path) ----
     var _open = XMLHttpRequest.prototype.open;
     var _send = XMLHttpRequest.prototype.send;
     var _setRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
@@ -152,58 +142,46 @@
       this.__aw3url = url;
       return _open.apply(this, arguments);
     };
-
     XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-      if (this.__aw3url && isTarget(this.__aw3url)) return;
+      if (whichEndpoint(this.__aw3url)) return;
       return _setRequestHeader.apply(this, arguments);
     };
-
     XMLHttpRequest.prototype.send = function (body) {
       var url = this.__aw3url;
-      if (!isTarget(url)) {
-        return _send.apply(this, arguments);
-      }
+      var kind = whichEndpoint(url);
+      if (!kind) return _send.apply(this, arguments);
 
       var self = this;
-      var ab = makeArrayBuffer();
-      var text = BODY;
-
+      var payload = toAB(bodyFor(kind));
       setTimeout(function () {
-        // Unity sets responseType = "arraybuffer" before send
-        var wantsAB = (self.responseType === 'arraybuffer' || self.responseType === 'arraybuffer');
-
+        var wantsAB = self.responseType === 'arraybuffer';
         try {
           Object.defineProperty(self, 'readyState', { configurable: true, get: function () { return 4; } });
           Object.defineProperty(self, 'status', { configurable: true, get: function () { return 200; } });
           Object.defineProperty(self, 'statusText', { configurable: true, get: function () { return 'OK'; } });
-          Object.defineProperty(self, 'response', { configurable: true, get: function () { return wantsAB ? ab : text; } });
-          Object.defineProperty(self, 'responseText', { configurable: true, get: function () { return text; } });
+          Object.defineProperty(self, 'response', { configurable: true, get: function () { return wantsAB ? payload.ab : payload.text; } });
+          Object.defineProperty(self, 'responseText', { configurable: true, get: function () { return payload.text; } });
           Object.defineProperty(self, 'responseURL', { configurable: true, get: function () { return url; } });
         } catch (e) {
-          self.readyState = 4;
-          self.status = 200;
-          self.statusText = 'OK';
-          self.response = wantsAB ? ab : text;
-          self.responseText = text;
+          self.readyState = 4; self.status = 200; self.statusText = 'OK';
+          self.response = wantsAB ? payload.ab : payload.text;
+          self.responseText = payload.text;
         }
-
         self.getAllResponseHeaders = function () {
-          return 'content-type: text/plain; charset=utf-8\r\ncontent-length: ' + BODY_BYTES.length + '\r\n';
+          return 'content-type: text/plain; charset=utf-8\r\ncontent-length: ' + payload.len + '\r\n';
         };
         self.getResponseHeader = function (name) {
           name = (name || '').toLowerCase();
           if (name === 'content-type') return 'text/plain; charset=utf-8';
-          if (name === 'content-length') return String(BODY_BYTES.length);
+          if (name === 'content-length') return String(payload.len);
           return null;
         };
-
         if (typeof self.onreadystatechange === 'function') try { self.onreadystatechange(); } catch (e) {}
         if (typeof self.onload === 'function') try { self.onload({}); } catch (e) {}
         if (typeof self.onloadend === 'function') try { self.onloadend({}); } catch (e) {}
       }, 10);
     };
   })();
-  // === end Photon AppId override ===
 
   var DATA_NAME = 'AirWars3-158.data.unityweb';
   var PARTS = [
@@ -227,9 +205,6 @@
     boot.style.display = 'none';
   }
 
-  // Returns true only if the full data file is really present (local join / CDN).
-  // Checks the Unity header instead of just "200 OK", because some hosts answer
-  // 200 + index.html for missing files, which would stall the loader.
   function probeFullData() {
     return fetch('Build/' + DATA_NAME, { headers: { Range: 'bytes=0-14' }, cache: 'no-store' })
       .then(function (r) {
@@ -245,7 +220,6 @@
       .catch(function () { return false; });
   }
 
-  // Fetch split parts, merge into one Blob, return object URL
   function mergeParts() {
     setBoot(0, 'Downloading data parts…');
     var loaded = 0;
@@ -262,19 +236,16 @@
       });
     })).then(function (buffers) {
       setBoot(92, 'Merging data…');
-      // Sanity-check Unity header (first 15 bytes of part 0)
       var header = String.fromCharCode.apply(null, new Uint8Array(buffers[0], 0, 15));
       if (header !== 'UnityWebData1.0') {
         throw new Error('Merged data is corrupt (bad header: ' + header + ')');
       }
-      // Blob takes the buffers as-is, so there is no extra full-size copy in memory
       dataBlobUrl = URL.createObjectURL(new Blob(buffers, { type: 'application/octet-stream' }));
       setBoot(96, 'Starting Unity…');
       return dataBlobUrl;
     });
   }
 
-  // Intercept XHR so requests for the full data file use the merged blob URL
   function installDataPatch(blobUrl) {
     var origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function (method, url) {
@@ -287,7 +258,6 @@
       return origOpen.apply(this, args);
     };
 
-    // Also patch fetch() in case anything uses it
     var origFetch = window.fetch;
     window.fetch = function (input, init) {
       var url = typeof input === 'string' ? input : (input && input.url);
@@ -310,7 +280,6 @@
       JSON_URL,
       {
         onProgress: function (instance, progress) {
-          // Map Unity 0..1 onto the last bit of our boot bar
           var pct = 96 + progress * 4;
           setBoot(pct, progress >= 1 ? 'Starting…' :
                           progress >= 0.9 ? 'Initializing game…' :
@@ -330,7 +299,6 @@
       startUnity();
       return;
     }
-    // GitHub Pages / repo without joined file: merge parts in the browser
     return mergeParts().then(function (blobUrl) {
       installDataPatch(blobUrl);
       startUnity();
